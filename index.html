@@ -24,9 +24,9 @@ table{border-collapse:separate;border-spacing:0}th{background:#0f2a5c;color:#f8e
 
 const K='bandingNilaiV1',$=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const uid=()=>Math.random().toString(36).slice(2,9);
-const def=()=>({ds:[],sel:{A:'',B:''},maps:{},conv:{method:'auto',dec:2,lo:'',hi:'',scope:'all'}});
+const def=()=>({ds:[],sel:{A:'',B:''},maps:{},conv:{method:'auto',dec:2,lo:'',hi:'',scope:'all'},nh:{rows:[],conv:{method:'auto',dec:2,lo:'',hi:'',scope:'all',by:'all',tmean:'',tsd:''}}});
 function migrate(d){if(!d)return def();let n=d;if(!d.ds){n=def();['A','B'].forEach(g=>{if(d[g]){const x={id:uid(),grp:g,...d[g]};n.ds.push(x);n.sel[g]=x.id}})}
- const c=Object.assign(def().conv,d.conv||{});if(c.method==='minmax'||c.method==='shift')c.method='ref';n.conv=c;n.maps=n.maps||{};n.sel=n.sel||{A:'',B:''};
+ const c=Object.assign(def().conv,d.conv||{});if(c.method==='minmax'||c.method==='shift')c.method='ref';n.conv=c;n.nh=Object.assign(def().nh,d.nh||{});n.nh.conv=Object.assign(def().nh.conv,n.nh.conv||{});n.maps=n.maps||{};n.sel=n.sel||{A:'',B:''};
  /* format lama: 1 baris = 1 mapel rekap -> 1 mapel acuan. Format baru: 1 baris = 1 mapel legger <- banyak mapel rekap */
  Object.keys(n.maps).forEach(k=>{const a=n.maps[k];if(!Array.isArray(a)){delete n.maps[k];return}
   if(a.some(m=>typeof m.from==='string')){const g={};a.forEach(m=>{if(Array.isArray(m.from)){g[m.to]=g[m.to]||m;return}if(!m.to)return;
@@ -97,6 +97,52 @@ function cmpRows(A,B,mp){const cv=convert(B,A),m=match(A,B),ks=mp?srcOf(mp,B):[]
  const gA=a=>a?(mp?a.scores[mp.to]??null:avg(a)):null,gB=b=>b?(mp?combOf(b,ks):avg(b)):null,gC=b=>b?(mp?cv[b.id].scores[mp.to]??null:cv[b.id].avg):null,gK=b=>b?(mp?cv[b.id].raw[mp.to]??null:cv[b.id].rk):null;
  const rows=m.map(([a,b])=>({a,b,A:gA(a),Bo:gB(b),Bc:gC(b),K:gK(b)})),ra=ranks(rows.map(r=>r.A)),ro=ranks(rows.map(r=>r.Bo)),rc=ranks(rows.map(r=>r.K));rows.forEach((r,i)=>{r.rA=ra[i];r.rO=ro[i];r.rC=rc[i]});return rows}
 function crkOf(d){const m={};if(!d.all)return m;const by={};d.students.forEach(s=>(by[d.cls[s.id]]=by[d.cls[s.id]]||[]).push(s));for(const k in by){const r=ranks(by[k].map(avg));by[k].forEach((s,i)=>m[s.id]=r[i])}return m}
+// ---------- nilai harian (NH) ----------
+const NHN=10,NHI=[...Array(NHN).keys()],nkey=(n,k)=>tok(n).join(' ')+'|'+String(k||'').trim().toUpperCase();
+function parseNH(wb,fname){let best=null;wb.SheetNames.forEach(n=>{const r=XLSX.utils.sheet_to_json(wb.Sheets[n],{header:1,defval:null});
+ const hi=r.findIndex(x=>x.some(c=>/^nama/i.test(String(c||'').trim())));if(hi<0)return;
+ const h=r[hi].map(c=>c==null?'':String(c).trim()),ni=h.findIndex(x=>/^nama/i.test(x)),ki=h.findIndex(x=>/^kelas/i.test(x)),cols={};let over=0;
+ h.forEach((x,i)=>{const m=/^nh\s*[-_.]?\s*0*(\d{1,2})$/i.exec(x);if(!m)return;const k=+m[1];if(k>=1&&k<=NHN)cols[k-1]=i;else if(k>NHN)over++});
+ const rows=[];for(let i=hi+1;i<r.length;i++){const row=r[i];if(!row||row[ni]==null||String(row[ni]).trim()==='')continue;
+  const nh=Array(NHN).fill(null);Object.keys(cols).forEach(k=>{const v=parseFloat(String(row[cols[k]]??'').replace(',','.'));if(!isNaN(v))nh[k]=v});
+  rows.push({name:String(row[ni]).trim(),kelas:ki>=0&&row[ki]!=null&&String(row[ki]).trim()?String(row[ki]).trim():fname.replace(/\.xlsx?$/i,''),nh})}
+ const p={rows,cols:Object.keys(cols).map(Number),over};if(!best||p.rows.length*p.cols.length>best.rows.length*best.cols.length)best=p});return best}
+async function importNH(files){let add=0,upd=0,bad=0,over=0;const D=S.nh;
+ for(const f of files){try{const p=parseNH(XLSX.read(await f.arrayBuffer(),{type:'array'}),f.name);if(!p||!p.rows.length||!p.cols.length){bad++;continue}over+=p.over;
+  p.rows.forEach(x=>{const ex=D.rows.find(y=>nkey(y.name,y.kelas)===nkey(x.name,x.kelas));
+   if(ex){p.cols.forEach(c=>ex.nh[c]=x.nh[c]);upd++}else{const n=Array(NHN).fill(null);p.cols.forEach(c=>n[c]=x.nh[c]);D.rows.push({id:uid(),name:x.name,kelas:x.kelas,nh:n});add++}})}catch(e){bad++}}
+ save();render();toast(`${add} siswa baru, ${upd} diperbarui`+(bad?`, ${bad} file gagal (butuh kolom Nama & NH1…NH${NHN})`:'')+(over?`, kolom NH di atas ${NHN} diabaikan`:''))}
+function convertNH(){const D=S.nh,c=D.conv,d=Math.min(4,Math.max(0,+c.dec||0)),[lo0,hi0]=effRange(cur('A')),pf=v=>{const x=parseFloat(v);return isNaN(x)?null:x};
+ const lo=pf(c.lo)??lo0,hi=pf(c.hi)??hi0,out={};D.rows.forEach(r=>out[r.id]={raw:Array(NHN).fill(null),nh:Array(NHN).fill(null)});
+ const grp={};D.rows.forEach(r=>(grp[c.by==='kelas'?r.kelas:'*']=grp[c.by==='kelas'?r.kelas:'*']||[]).push(r));
+ Object.values(grp).forEach(G=>{const pool=c.scope==='all'?stats(G.flatMap(r=>r.nh.filter(x=>x!=null))):null;
+  NHI.forEach(i=>{const b=pool||stats(G.map(r=>r.nh[i]));if(b.mean==null)return;let f;
+   if(c.method==='auto')f=x=>b.max===b.min?hi:lo+(x-b.min)*(hi-lo)/(b.max-b.min);
+   else if(c.method==='meansd'){const tm=pf(c.tmean),ts=pf(c.tsd);f=tm==null?x=>x:x=>b.sd?tm+(x-b.mean)*(ts==null?1:ts/b.sd):tm}
+   else f=x=>x;
+   G.forEach(r=>{const v=r.nh[i];if(v==null)return;const z=c.method==='none'?v:Math.min(100,Math.max(0,f(v)));out[r.id].raw[i]=z;out[r.id].nh[i]=+z.toFixed(d)})})});
+ D.rows.forEach(r=>{const o=out[r.id],m=a=>{const v=a.filter(x=>x!=null);return v.length?v.reduce((p,q)=>p+q,0)/v.length:null};o.avgO=m(r.nh);o.avg=m(o.nh);o.rawAvg=m(o.raw)});return out}
+const nhUsed=()=>NHI.filter(i=>S.nh.rows.some(r=>r.nh[i]!=null));
+function exportNH(){const D=S.nh,cv=convertNH(),u=nhUsed(),ro=ranks(D.rows.map(r=>cv[r.id].avgO)),rc=ranks(D.rows.map(r=>cv[r.id].rawAvg));
+ xl('nilai-harian-konversi',D.rows.map((r,i)=>({No:i+1,Nama:r.name,Kelas:r.kelas,...Object.fromEntries(u.map(k=>['NH'+(k+1),cv[r.id].nh[k]??''])),'Rata NH asli':+f2(cv[r.id].avgO),'Rata NH konversi':+f2(cv[r.id].avg),'Rank asli':ro[i],'Rank konversi':rc[i]})),'NH Konversi')}
+function tplNH(){const rows=[1,2].map(n=>({No:n,Nama:n===1?'CONTOH NAMA SISWA':'',Kelas:'7 A',...Object.fromEntries(NHI.map(k=>['NH'+(k+1),n===1?80+k:'']))}));xl('template-nilai-harian',rows,'NH')}
+function editNH(id){const r=S.nh.rows.find(x=>x.id===id);if(!r)return;
+ mo(`<h3 class="font-serif text-lg text-navy-800 mb-3">Edit nilai harian</h3><div class="grid grid-cols-2 gap-2 mb-3"><div><label class="text-xs text-slate-600">Nama</label><input id="hn" class="inp" value="${esc(r.name)}"></div><div><label class="text-xs text-slate-600">Kelas</label><input id="hk" class="inp" value="${esc(r.kelas)}"></div></div><div class="grid grid-cols-2 sm:grid-cols-5 gap-2">${NHI.map(i=>`<div><label class="text-xs text-slate-600">NH${i+1}</label><input data-h="${i}" type="number" step="any" class="inp" value="${r.nh[i]??''}"></div>`).join('')}</div><div class="flex justify-end gap-2 mt-4"><button class="btn b3" onclick="mc()">Batal</button><button class="btn b1" onclick="saveNH('${id}')">Simpan</button></div>`)}
+function saveNH(id){const r=S.nh.rows.find(x=>x.id===id),n=$('#hn').value.trim();if(!n)return toast('Nama wajib diisi');r.name=n;r.kelas=$('#hk').value.trim()||r.kelas;
+ document.querySelectorAll('#mb [data-h]').forEach(i=>{const v=parseFloat(i.value);r.nh[+i.dataset.h]=isNaN(v)?null:v});save();mc();render();toast('Tersimpan')}
+function delNH(id){if(!confirm('Hapus siswa ini dari data nilai harian?'))return;S.nh.rows=S.nh.rows.filter(x=>x.id!==id);save();render()}
+function clearNH(){if(!confirm('Hapus semua data nilai harian?'))return;S.nh.rows=[];save();render()}
+function vNH(){const D=S.nh,c=D.conv,imp=`<label class="btn b1 inline-block cursor-pointer">Import Excel NH<input type="file" multiple accept=".xlsx,.xls" class="hidden" onchange="importNH([...this.files]);this.value=''"></label>`;
+ if(!D.rows.length)return`<div class="card p-6 max-w-2xl"><h3 class="font-serif text-lg text-navy-800">Konversi nilai harian (NH)</h3><p class="text-sm text-slate-600 my-2">Menu ini khusus nilai harian dan terpisah dari data legger/ujian. Impor file Excel dengan kolom:</p><p class="text-sm font-semibold text-navy-700 mb-2">No, Nama, Kelas, NH1, NH2, … NH${NHN}</p><p class="text-xs text-slate-500 mb-3">Maksimal ${NHN} nilai harian. Kolom NH yang kosong dibiarkan kosong. Satu file boleh berisi beberapa kelas; file lain bisa ditambahkan tanpa menghapus data yang ada (siswa dengan nama &amp; kelas sama diperbarui).</p><div class="flex gap-2">${imp}<button class="btn b3" onclick="tplNH()">Unduh template</button></div></div>`;
+ const cv=convertNH(),u=nhUsed(),ks=[...new Set(D.rows.map(r=>r.kelas))],qq=q.toLowerCase(),[lo,hi]=effRange(cur('A'));
+ const ro=ranks(D.rows.map(r=>cv[r.id].avgO)),rc=ranks(D.rows.map(r=>cv[r.id].rawAvg)),shown=D.rows.map((r,i)=>[r,i]).filter(([r])=>r.name.toLowerCase().includes(qq)&&(!kf||r.kelas===kf));
+ const opt=(v,t)=>`<option value="${v}" ${c.method===v?'selected':''}>${t}</option>`,set=(k,v)=>`S.nh.conv.${k}=${v};save();render()`;
+ const bar=`<div class="tb">${imp}<button class="btn b3" onclick="tplNH()">Template</button>${ks.length>1?`<label>Kelas<select class="sm" onchange="kf=this.value;render()"><option value="">Semua</option>${ks.map(k=>`<option ${k===kf?'selected':''}>${esc(k)}</option>`).join('')}</select></label>`:''}<label>Metode<select class="sm" onchange="${set('method','this.value')}">${opt('auto','Otomatis (rentang nilai)')}${opt('meansd','Rata-rata &amp; sebaran')}${opt('none','Tidak dikonversi')}</select></label>`+
+ (c.method==='auto'?`<label>Terendah<input class="sm !w-16" type="number" step="any" value="${c.lo}" placeholder="${f2(lo,0)}" onchange="${set('lo','this.value')}"></label><label>Tertinggi<input class="sm !w-16" type="number" step="any" value="${c.hi}" placeholder="${f2(hi,0)}" onchange="${set('hi','this.value')}"></label>`:'')+
+ (c.method==='meansd'?`<label>Rata target<input class="sm !w-16" type="number" step="any" value="${c.tmean}" onchange="${set('tmean','this.value')}"></label><label>SD target<input class="sm !w-16" type="number" step="any" value="${c.tsd}" placeholder="asli" onchange="${set('tsd','this.value')}"></label>`:'')+
+ (c.method!=='none'?`<label>Cakupan<select class="sm" onchange="${set('scope','this.value')}"><option value="all" ${c.scope==='all'?'selected':''}>Satu pola semua NH</option><option value="each" ${c.scope==='each'?'selected':''}>Per NH</option></select></label>${ks.length>1?`<label>Hitung per<select class="sm" onchange="${set('by','this.value')}"><option value="all" ${c.by==='all'?'selected':''}>Semua kelas gabungan</option><option value="kelas" ${c.by==='kelas'?'selected':''}>Tiap kelas</option></select></label>`:''}`:'')+
+ `<label>Desimal<input class="sm !w-12" type="number" min="0" max="4" value="${c.dec}" onchange="${set('dec','this.value')}"></label>${srch()}<button class="btn b2" onclick="exportNH()">Export</button><button class="btn b4" onclick="clearNH()">Hapus data</button><span class="chip ok">${shown.length} siswa · ${u.length} NH</span></div>`;
+ return bar+tw(`<thead><tr><th class="nm">Nama</th><th>Kelas</th>${u.map(i=>`<th>NH${i+1}</th>`).join('')}<th>Rata asli</th><th>Rata konversi</th><th>Rank asli</th><th>Rank konversi</th><th>Aksi</th></tr></thead><tbody>${shown.map(([r,i])=>{const o=cv[r.id];return`<tr><td class="nm">${esc(r.name)}</td><td class="whitespace-nowrap">${esc(r.kelas)}</td>${u.map(k=>{const v=r.nh[k],n=o.nh[k];return`<td>${v==null?'–':(c.method==='none'||Math.abs(n-v)<1e-9)?n:`<b class="text-navy-700">${n}</b> <span class="text-xs text-slate-400">${+v.toFixed(2)}</span>`}</td>`}).join('')}<td>${f2(o.avgO)}</td><td class="font-semibold text-navy-700">${f2(o.avg)}</td><td>${ro[i]??'–'}</td><td>${rc[i]??'–'}</td><td class="whitespace-nowrap">${ib('edit',`editNH('${r.id}')`,'Edit')} ${ib('del',`delNH('${r.id}')`,'Hapus')}</td></tr>`}).join('')}</tbody>`)}
 // ---------- export ----------
 function xl(name,rows,sheet='Data'){const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(rows),sheet);XLSX.writeFile(wb,name+'.xlsx')}
 function rowsOf(d){const rk=ranks(d.students.map(avg)),ck=crkOf(d);return d.students.map((s,i)=>({No:i+1,Nama:s.name,...(d.all?{Kelas:d.cls[s.id]}:{}),...s.scores,'Rata-rata':+f2(avg(s)),Ranking:rk[i],...(d.all?{'Rank kelas':ck[s.id]}:{})}))}
@@ -127,7 +173,7 @@ function togMap(id){const m=getMap(id);m.off=!m.off;save();render()}
 function autoMatch(){const A=cur('A'),B=cur('B');fill(B,A);let n=0;mapsOf(B,A).forEach(m=>{if(!srcOf(m,B).length){const a=autoFrom(m.to,B);if(a.length){m.from=a;n++}}});save();render();toast(n?`${n} mapel legger dicocokkan otomatis`:'Tidak ada yang cocok otomatis')}
 function delMap(id){if(!confirm('Hapus mapel legger ini dari daftar konversi? (bisa ditambahkan lagi lewat tombol "Tambah mapel legger yang belum ada")'))return;const B=cur('B');S.maps[B.id]=S.maps[B.id].filter(m=>m.id!==id);save();render()}
 // ---------- tampilan ----------
-const TABS=[['dash','Ringkasan'],['imp','Import'],['dataA','Data Sebelumnya'],['dataB','Data Ujian'],['map','Mapel'],['conv','Konversi'],['cmp','Perbandingan'],['bak','Backup']];
+const TABS=[['dash','Ringkasan'],['imp','Import'],['dataA','Data Sebelumnya'],['dataB','Data Ujian'],['map','Mapel'],['conv','Konversi'],['nh','Nilai Harian'],['cmp','Perbandingan'],['bak','Backup']];
 const applySb=()=>$('#sb').classList.toggle('hide',sbv!=='1');
 function toggleSb(){sbv=sbv==='1'?'0':'1';localStorage.setItem('bandingSb',sbv);applySb()}
 function go(k){tab=k;q='';kf='';if(innerWidth<768){sbv='0';applySb()}render()}
@@ -172,7 +218,7 @@ function vCmp(){if(need())return empty('Impor kedua data untuk melihat perbandin
 function vBak(){return`<div class="grid md:grid-cols-2 gap-3"><div class="card p-4"><h3 class="font-serif text-lg text-navy-800">Backup</h3><p class="text-sm text-slate-600 my-2">Simpan semua data, pengaturan mapel, dan konversi ke file JSON.</p><button class="btn b1" onclick="dl('backup-banding-nilai-'+new Date().toISOString().slice(0,10)+'.json',JSON.stringify(S),'application/json')">Unduh backup</button></div><div class="card p-4"><h3 class="font-serif text-lg text-navy-800">Restore</h3><p class="text-sm text-slate-600 my-2">Memulihkan akan menggantikan semua data di perangkat ini.</p><label class="btn b2 inline-block cursor-pointer">Pilih file backup<input type="file" accept=".json" class="hidden" onchange="restore(this.files[0]);this.value=''"></label><button class="btn b4 ml-2" onclick="if(confirm('Hapus semua data di perangkat ini?')){S=def();save();render()}">Hapus semua</button></div></div>`}
 function restore(f){if(!f)return;const r=new FileReader();r.onload=e=>{try{const d=JSON.parse(e.target.result);if(!(d.ds||'A'in d))throw 0;if(!confirm('Ganti semua data dengan backup ini?'))return;S=migrate(d);save();render();toast('Restore berhasil')}catch(x){toast('File backup tidak valid')}};r.readAsText(f)}
 function render(keep){VC={};const A=cur('A'),B=cur('B');if(A&&B&&!S.maps[B.id])fill(B,A);nav();
- const V={dash:vDash,imp:vImp,dataA:()=>vData('A'),dataB:()=>vData('B'),map:vMap,conv:vConv,cmp:vCmp,bak:vBak}[tab],act=document.activeElement,pos=act?.selectionStart,had=keep&&act&&act.placeholder;
+ const V={dash:vDash,imp:vImp,dataA:()=>vData('A'),dataB:()=>vData('B'),map:vMap,conv:vConv,nh:vNH,cmp:vCmp,bak:vBak}[tab],act=document.activeElement,pos=act?.selectionStart,had=keep&&act&&act.placeholder;
  $('#v').innerHTML=V();if(had){const i=$('#v input.sm');i.focus();i.setSelectionRange(pos,pos)}}
 applySb();render();
 if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
